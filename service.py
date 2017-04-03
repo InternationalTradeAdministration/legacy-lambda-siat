@@ -19,11 +19,12 @@ group_mappings = {
 }
 
 s3 = boto3.resource('s3')
+url_payload = { "freshen_url": "https://api.trade.gov/v1/siat_data/freshen.json?api_key="}
+lambda_client = boto3.client('lambda')
 
 def handler(event, context):
   bucket_name = event['Records'][0]['s3']['bucket']['name']
   bucket = s3.Bucket(bucket_name)
-  pp = pprint.PrettyPrinter(indent=4)
   data = []
 
   for obj in bucket.objects.all():
@@ -44,8 +45,7 @@ def handler(event, context):
 
     for i, sheet in enumerate(book.sheets()):
       data = data + process_rows(sheet, entry, header_row_index, double_row_header)
-     
-  #pp.pprint(json.dumps(data))    
+       
   write_csv_file(data)
 
 def process_rows(sheet, entry, header_row_index, double_row_header):
@@ -145,5 +145,14 @@ def write_csv_file(data):
     dict_writer.writeheader()
     dict_writer.writerows(data)
   response = s3.Object('siat-csv', 'entries.csv').put(Body=open('/tmp/entries.csv').read(), ContentType='application/csv', ACL='public-read')
-
+  try:
+    response = s3.Object('siat-csv', 'entries.csv').put(Body=open('/tmp/entries.csv').read(), ContentType='application/csv', ACL='public-read')
+    if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+      lambda_client.invoke(FunctionName="endpoint_freshen", InvocationType='Event', Payload=json.dumps(url_payload))
+      print("Freshening data...")
+    return response
+  except Exception as e:
+    print("Error writing file to S3 bucket: ")
+    print(e)
+    raise e
 
