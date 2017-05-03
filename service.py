@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 import boto3, xlrd, pprint, os, re, collections, csv, uuid, json
+from taxonomy_mapper import TaxonomyMapper
+
+mapper_config = [{'starting_field': 'group', 'desired_field': 'country'}, {'starting_field': 'group', 'desired_field': 'world_region'}]
+mapper_source = 'SIATData'
+taxonomy_mapper = TaxonomyMapper({'config': mapper_config, 'mapper_source': mapper_source})
 
 group_mappings = {
   "No":                 "Package:  No",               
@@ -80,6 +85,10 @@ def entries_from_row(sheet, row, entry, question_row_index, header_row_index, do
       'answer': answer,
       'percentage_or_value': extract_cell_value(cell)
     })
+    entry_copy = taxonomy_mapper.add_taxonomy_fields(entry_copy)
+
+    if entry_copy["world_region"] != "" and entry_copy["world_region"] != None: 
+      entry_copy["world_region"] = ";".join(entry_copy["world_region"])
     return_data.append(entry_copy)
   return return_data
 
@@ -144,7 +153,6 @@ def write_csv_file(data):
     dict_writer = csv.DictWriter(csv_file, keys, quotechar='"')
     dict_writer.writeheader()
     dict_writer.writerows(data)
-  response = s3.Object('siat-csv', 'entries.csv').put(Body=open('/tmp/entries.csv').read(), ContentType='application/csv', ACL='public-read')
   try:
     response = s3.Object('siat-csv', 'entries.csv').put(Body=open('/tmp/entries.csv').read(), ContentType='application/csv', ACL='public-read')
     if response['ResponseMetadata']['HTTPStatusCode'] == 200:
