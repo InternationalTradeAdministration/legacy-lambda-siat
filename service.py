@@ -111,8 +111,8 @@ def extract_cell_value(cell):
   return value
 
 def extract_question(sheet, question_row_index):
-  question = sheet.row(question_row_index)[0].value.strip().replace('*', '')
-  return re.sub(r'((T)*ABLE [0-9]+ - )?Q[0-9]+[a-z]*.(/)?(Q)?[0-9]*[a-z]*(.)?', '', question)
+  return sheet.row(question_row_index)[0].value.strip().replace('*', '')
+  #for future reference, regex to remove table/question text: re.sub(r'((T)*ABLE [0-9]+ - )?Q[0-9]+[a-z]*.(/)?(Q)?[0-9]*[a-z]*(.)?', '', question)
 
 def extract_number_of_respondents(sheet, question_row_index, column_index):
   value = sheet.row(question_row_index + 1)[column_index].value
