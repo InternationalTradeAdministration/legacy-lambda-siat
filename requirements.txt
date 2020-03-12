@@ -1,3 +1,5 @@
-python-lambda
-boto3
+azure-functions
+azure-storage
+azure-storage-blob
+asyncio
 xlrd

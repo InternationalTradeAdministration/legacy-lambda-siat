@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
-import boto3, xlrd, pprint, os, re, collections, csv, uuid, json
-from taxonomy_mapper import TaxonomyMapper
+import xlrd, os, re, collections, csv, uuid, json, logging
+from .taxonomy_mapper import TaxonomyMapper
+from azure.storage.blob.blockblobservice import BlockBlobService as bbs
+import tempfile
 
 mapper_config = [{'starting_field': 'group', 'desired_field': 'country'}, {'starting_field': 'group', 'desired_field': 'world_region'}]
 mapper_source = 'SIATData'
 taxonomy_mapper = TaxonomyMapper({'config': mapper_config, 'mapper_source': mapper_source})
+
+conn_str = os.environ["AzureWebJobsStorage"]
+acct_name = re.search('AccountName=(.+?);', conn_str).group(1)
+acct_key = re.search('AccountKey=(.+?);', conn_str).group(1)
+container_name = os.environ["ContainerName"]
+
 
 group_mappings = {
   "No":                 "Package:  No",               
@@ -23,35 +31,36 @@ group_mappings = {
   "Airlines in U.S.":   "Transportation:  Airlines in U.S."
 }
 
-s3 = boto3.resource('s3')
-url_payload = { "freshen_url": "https://api.trade.gov/v1/siat_data/freshen.json?api_key="}
-lambda_client = boto3.client('lambda')
 
-def handler(event, context):
-  bucket_name = event['Records'][0]['s3']['bucket']['name']
-  bucket = s3.Bucket(bucket_name)
+def handler(workbook):
   data = []
+  
+  
+  entry = collections.OrderedDict()
+  header_row_index = set_header_row_index(workbook.name)
+  double_row_header = set_double_row_header(workbook.name)
+  entry['type'] = set_survey_type(workbook.name)
+  
+  
+  match_group = re.search(r'[0-9]{4}', workbook.name)
+  if not match_group:
+    return
+  entry['year'] = match_group.group()
 
-  for obj in bucket.objects.all():
-    path = obj.key
-    download_path = '/tmp/{}{}'.format(uuid.uuid4(), path)
-    bucket.download_file(path, download_path)
+  book = xlrd.open_workbook(file_contents=workbook.read())
+  
+  for i, sheet in enumerate(book.sheets()):
+    data = data + process_rows(sheet, entry, header_row_index, double_row_header)
+  
+  temp_file = tempfile.NamedTemporaryFile(mode="r+", delete=False)
+  write_csv_file(data, workbook.name, temp_file)
 
-    entry = collections.OrderedDict()
-    header_row_index = set_header_row_index(path)
-    double_row_header = set_double_row_header(path)
-    entry['type'] = set_survey_type(path)
-    
-    match_group = re.search(r'[0-9]{4}', path)
-    if not match_group:
-      continue
-    entry['year'] = match_group.group()
-    book = xlrd.open_workbook(download_path)
+  new_blob_name = 'translated/'+workbook.name[5:].replace('xlsx', 'csv')
+  block_blob_service = bbs(account_name = acct_name, account_key = acct_key)
+  with open(temp_file.name, 'r+') as upload_data:
+    block_blob_service.create_blob_from_text(container_name = container_name, blob_name = new_blob_name, text = str(upload_data.read()))
 
-    for i, sheet in enumerate(book.sheets()):
-      data = data + process_rows(sheet, entry, header_row_index, double_row_header)
-       
-  write_csv_file(data)
+  temp_file.close()
 
 def process_rows(sheet, entry, header_row_index, double_row_header):
   question_row_index = 0
@@ -87,8 +96,6 @@ def entries_from_row(sheet, row, entry, question_row_index, header_row_index, do
     })
     entry_copy = taxonomy_mapper.add_taxonomy_fields(entry_copy)
 
-    if entry_copy["world_region"] != "" and entry_copy["world_region"] != None: 
-      entry_copy["world_region"] = ";".join(entry_copy["world_region"])
     return_data.append(entry_copy)
   return return_data
 
@@ -115,7 +122,12 @@ def extract_question(sheet, question_row_index):
   #for future reference, regex to remove table/question text: re.sub(r'((T)*ABLE [0-9]+ - )?Q[0-9]+[a-z]*.(/)?(Q)?[0-9]*[a-z]*(.)?', '', question)
 
 def extract_number_of_respondents(sheet, question_row_index, column_index):
-  value = sheet.row(question_row_index + 1)[column_index].value
+  while 'Number of Respondents' not in sheet.row(question_row_index + 1)[0].value:
+    question_row_index = question_row_index + 1
+  value =sheet.row(question_row_index + 1)[column_index].value
+  if type(value)==str:
+    value = value.strip("()*")
+  value = float(value)
   if value < 0:
     value = value * -1
   return value
@@ -147,20 +159,9 @@ def set_double_row_header(path):
   else:
     return False
 
-def write_csv_file(data):
+def write_csv_file(data, xls_file_name, temp_file):
   keys = data[0].keys()
-  with open('/tmp/entries.csv', 'wb') as csv_file:
+  with open (temp_file.name, "w+") as csv_file:
     dict_writer = csv.DictWriter(csv_file, keys, quotechar='"')
     dict_writer.writeheader()
     dict_writer.writerows(data)
-  try:
-    response = s3.Object('siat-csv', 'entries.csv').put(Body=open('/tmp/entries.csv').read(), ContentType='application/csv', ACL='public-read')
-    if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-      lambda_client.invoke(FunctionName="endpoint_freshen", InvocationType='Event', Payload=json.dumps(url_payload))
-      print("Freshening data...")
-    return response
-  except Exception as e:
-    print("Error writing file to S3 bucket: ")
-    print(e)
-    raise e
-
