@@ -2,8 +2,9 @@
 import json
 import os
 import urllib
+import logging
 MAPPER_TEMPLATE = "http://im.govwizely.com/api/terms.json?mapped_term=%s&source=%s&log_failed=true"
-TAXONOMY_TEMPLATE = "https://api.trade.gov/ita_taxonomies/search.json?size=1&types=Countries&api_key=%s&q=%s"
+TAXONOMY_TEMPLATE = "https://api.trade.gov/ita_taxonomies/search.json?size=1&types=Countries&api_key=DoC9TUgIck11HgwBdIvcd-RV&q=%s"
 
 class TaxonomyMapper:
   def __init__(self, options):
@@ -28,8 +29,9 @@ class TaxonomyMapper:
   def add_world_region(self, term, mapper_response):
     if "Countries" in term["taxonomies"]:
       country = term["name"]
-      taxonomy_response = self.cached_response_for(TAXONOMY_TEMPLATE % (os.environ['API_KEY'], country))
-      return taxonomy_response["results"][0]["related_terms"]["world_regions"]
+     
+      taxonomy_response = self.cached_response_for(TAXONOMY_TEMPLATE % country)
+      return taxonomy_response["results"][0]["object_properties"]["has_broader"][0]["label"]
     elif "World Regions" in term["taxonomies"]:
       return [term["name"] for term in mapper_response]
     else:
@@ -45,6 +47,7 @@ class TaxonomyMapper:
     if url in self.request_cache:
       return self.request_cache[url]
     else:
-      response = json.loads(urllib.urlopen(url).read())
+      url = url.replace(' ', '%20')
+      response = json.loads(urllib.request.urlopen(url).read())
       self.request_cache[url] = response
       return response
